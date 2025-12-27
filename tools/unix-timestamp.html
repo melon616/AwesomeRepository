@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unix Nanosecond Timestamp Converter</title>
+    <style>
+        body {
+            font-family: -apple-system, sans-serif;
+            padding: 20px;
+            line-height: 1.5;
+            max-width: 800px;
+            margin: 0 auto;
+            background: #fff;
+            color: #333;
+        }
+
+        h1 {
+            font-size: 1.6rem;
+            margin-bottom: 0.5rem;
+        }
+
+        p.description {
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            font-size: 1.3rem;
+            padding: 12px;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            border: 2px solid #eee;
+            border-radius: 6px;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            border-color: #007bff;
+        }
+
+        .output-group {
+            margin-top: 25px;
+            display: grid;
+            gap: 20px;
+        }
+
+        .output-box {
+            background: #f8f9fa;
+            padding: 18px;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+        }
+
+        .label {
+            font-size: 0.75rem;
+            font-weight: bold;
+            color: #888;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .value {
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-size: 1.2rem;
+            word-break: break-all;
+        }
+
+        .ns-highlight {
+            color: #e83e8c;
+            font-weight: bold;
+        }
+
+        button {
+            margin-top: 12px;
+            cursor: pointer;
+            padding: 8px 16px;
+            background: #333;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            transition: opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.8;
+        }
+
+        .footer {
+            margin-top: 40px;
+            font-size: 0.8rem;
+            color: #999;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Unix Timestamp Converter</h1>
+    <p class="description">Supports Seconds, Milliseconds, and 19-digit Nanoseconds (ns).</p>
+
+    <input type="text" id="ts" placeholder="Paste timestamp here..." value="1764042443896830464">
+    <button onclick="setCurrent()">Use Current Time (ns)</button>
+
+    <div class="output-group">
+        <div class="output-box">
+            <div class="label">UTC Date (ISO 8601 High Precision)</div>
+            <div id="utc" class="value"></div>
+        </div>
+        <div class="output-box">
+            <div class="label">Local Date & Time</div>
+            <div id="local" class="value"></div>
+        </div>
+        <div class="output-box">
+            <div class="label">Precision Diagnostics</div>
+            <div id="detail" class="value"></div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Inspired by simonw/tools. Built with BigInt for 100% precision.
+    </div>
+
+    <script>
+        const input = document.getElementById('ts');
+        const utcDiv = document.getElementById('utc');
+        const localDiv = document.getElementById('local');
+        const detailDiv = document.getElementById('detail');
+
+        function update() {
+            let val = input.value.trim().replace(/,/g, ''); // Allow comma separators
+            if (!val || !/^\d+$/.test(val)) {
+                utcDiv.innerText = "Waiting for valid numeric input...";
+                return;
+            }
+
+            try {
+                // Use BigInt to handle 19+ digits without float rounding errors
+                let nsBig = BigInt(val);
+                let ms, remNs, detectedUnit;
+
+                const len = val.length;
+                if (len <= 11) { // Seconds
+                    ms = Number(nsBig * 1000n);
+                    remNs = 0n;
+                    detectedUnit = "Seconds (s)";
+                } else if (len <= 14) { // Milliseconds
+                    ms = Number(nsBig);
+                    remNs = 0n;
+                    detectedUnit = "Milliseconds (ms)";
+                } else { // Nanoseconds (19 digits)
+                    ms = Number(nsBig / 1000000n);
+                    remNs = nsBig % 1000000n;
+                    detectedUnit = "Nanoseconds (ns)";
+                }
+
+                const d = new Date(ms);
+                if (isNaN(d.getTime())) throw new Error("Invalid Date Range");
+
+                // UTC String Assembly (ISO format with manually appended 6-digit nanosecond tail)
+                const iso = d.toISOString(); // Format: YYYY-MM-DDTHH:mm:ss.sssZ
+                const baseISO = iso.split('.')[0];
+                const msPart = (ms % 1000).toString().padStart(3, '0');
+                const nsTail = remNs.toString().padStart(6, '0');
+
+                utcDiv.innerHTML = `${baseISO}.<span class="ns-highlight">${msPart}${nsTail}</span>Z`;
+
+                // Local Time Display
+                localDiv.innerText = d.toLocaleString() + ` (${ms % 1000}ms)`;
+
+                // Technical Details
+                detailDiv.innerHTML = `
+                    Unit detected: <b>${detectedUnit}</b><br>
+                    Epoch Milliseconds: ${ms}<br>
+                    Nanosecond Remainder: <span class="ns-highlight">${remNs}</span>
+                `;
+
+            } catch (e) {
+                utcDiv.innerText = "Error: Invalid timestamp or out of range";
+                localDiv.innerText = "-";
+                detailDiv.innerText = "-";
+            }
+        }
+
+        function setCurrent() {
+            // JS performance.now() or Date.now() * 1e6 for simulation
+            const nowNs = BigInt(Date.now()) * 1000000n;
+            input.value = nowNs.toString();
+            update();
+        }
+
+        input.addEventListener('input', update);
+        // Initial run
+        update();
+    </script>
+</body>
+
+</html>
