@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GeoJSON Viewer</title>
+    <style>
+        body { margin: 0; display: flex; height: 100vh; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        #sidebar { width: 320px; display: flex; flex-direction: column; background: #1e1e1e; color: #d4d4d4; padding: 15px; z-index: 10; box-shadow: 2px 0 10px rgba(0,0,0,0.3); }
+        h3 { margin: 0 0 10px 0; font-size: 16px; color: #fff; }
+        textarea { flex: 1; background: #252526; color: #9cdcfe; border: 1px solid #3c3c3c; padding: 10px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; resize: none; border-radius: 4px; }
+        #canvas-container { flex: 1; position: relative; background: #ffffff; cursor: crosshair; }
+        .hint { font-size: 11px; color: #888; margin-top: 8px; line-height: 1.4; }
+        #error { color: #f48771; font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h3>GeoJSON 数据</h3>
+    <textarea id="input" placeholder="请在此粘贴 GeoJSON 代码..."></textarea>
+    <div id="error"></div>
+    <div class="hint">
+        • <b>滚轮</b>：缩放画布<br>
+        • <b>左键拖拽</b>：平移视野<br>
+        • <b>蓝线</b>：几何路径<br>
+        • <b>红点</b>：坐标节点 (Vertex)
+    </div>
+</div>
+
+<div id="canvas-container">
+    <canvas id="mapCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const input = document.getElementById('input');
+    const errorDiv = document.getElementById('error');
+
+    let geoData = null;
+    let transform = { x: 0, y: 0, scale: 1 };
+    let isDragging = false;
+    let lastMouse = { x: 0, y: 0 };
+
+    function resize() {
+        canvas.width = canvas.parentElement.clientWidth;
+        canvas.height = canvas.parentElement.clientHeight;
+        draw();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 核心绘制函数
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!geoData) return;
+
+        ctx.save();
+        ctx.translate(transform.x, transform.y);
+        ctx.scale(transform.scale, transform.scale);
+        
+        // 样式配置
+        const strokeColor = '#0066ff';
+        const pointColor = '#ff3300';
+        const lineWidth = 1.5 / transform.scale; // 保持视觉线宽一致
+        const pointRadius = 3 / transform.scale; // 保持圆点大小一致
+
+        const features = getFeatures(geoData);
+        
+        features.forEach(feature => {
+            if (!feature.geometry) return;
+            renderGeometry(feature.geometry, strokeColor, pointColor, lineWidth, pointRadius);
+        });
+
+        ctx.restore();
+    }
+
+    function getFeatures(data) {
+        if (data.type === 'FeatureCollection') return data.features;
+        if (data.type === 'Feature') return [data];
+        return [{ type: 'Feature', geometry: data }];
+    }
+
+    function renderGeometry(geom, sColor, pColor, lWidth, pRadius) {
+        ctx.strokeStyle = sColor;
+        ctx.lineWidth = lWidth;
+        ctx.fillStyle = pColor;
+
+        if (geom.type === 'Point') {
+            drawNode(geom.coordinates[0], -geom.coordinates[1], pRadius);
+        } else if (geom.type === 'MultiPoint') {
+            geom.coordinates.forEach(pt => drawNode(pt[0], -pt[1], pRadius));
+        } else if (geom.type === 'LineString') {
+            drawPath(geom.coordinates, pRadius);
+        } else if (geom.type === 'MultiLineString') {
+            geom.coordinates.forEach(line => drawPath(line, pRadius));
+        } else if (geom.type === 'Polygon') {
+            geom.coordinates.forEach(ring => drawPath(ring, pRadius));
+        } else if (geom.type === 'MultiPolygon') {
+            geom.coordinates.forEach(poly => {
+                poly.forEach(ring => drawPath(ring, pRadius));
+            });
+        }
+    }
+
+    // 绘制线段及节点
+    function drawPath(points, r) {
+        if (points.length < 1) return;
+
+        // 1. 先画线段
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], -points[0][1]);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i][0], -points[i][1]);
+        }
+        ctx.stroke();
+
+        // 2. 再画每个节点圆点
+        points.forEach(pt => {
+            drawNode(pt[0], -pt[1], r);
+        });
+    }
+
+    // 绘制圆点函数
+    function drawNode(x, y, r) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 自动缩放以适应数据
+    function autoFit() {
+        let coords = [];
+        const extract = (g) => {
+            if (!g) return;
+            const t = (c) => {
+                if (typeof c[0] === 'number') coords.push([c[0], -c[1]]);
+                else c.forEach(t);
+            };
+            t(g.coordinates);
+        };
+        getFeatures(geoData).forEach(f => extract(f.geometry));
+
+        if (coords.length === 0) return;
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        coords.forEach(([x, y]) => {
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        });
+
+        const w = maxX - minX || 1;
+        const h = maxY - minY || 1;
+        const padding = 40;
+        const s = Math.min((canvas.width - padding) / w, (canvas.height - padding) / h);
+        
+        transform.scale = s;
+        transform.x = canvas.width / 2 - (minX + w / 2) * s;
+        transform.y = canvas.height / 2 - (minY + h / 2) * s;
+        draw();
+    }
+
+    // 事件处理
+    input.addEventListener('input', () => {
+        try {
+            if(!input.value.trim()) { geoData = null; draw(); return; }
+            geoData = JSON.parse(input.value);
+            errorDiv.innerText = "";
+            autoFit();
+        } catch (e) {
+            errorDiv.innerText = "解析错误: " + e.message;
+        }
+    });
+
+    canvas.addEventListener('mousedown', e => { 
+        isDragging = true; 
+        lastMouse = { x: e.clientX, y: e.clientY }; 
+    });
+    window.addEventListener('mouseup', () => isDragging = false);
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        transform.x += e.clientX - lastMouse.x;
+        transform.y += e.clientY - lastMouse.y;
+        lastMouse = { x: e.clientX, y: e.clientY };
+        draw();
+    });
+
+    canvas.addEventListener('wheel', e => {
+        e.preventDefault();
+        const zoom = Math.exp(-e.deltaY * 0.001);
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        transform.x = mouseX - (mouseX - transform.x) * zoom;
+        transform.y = mouseY - (mouseY - transform.y) * zoom;
+        transform.scale *= zoom;
+        draw();
+    }, { passive: false });
+
+    // 初始化默认数据 (北京天安门附近的一个简单示例)
+    input.value = JSON.stringify({
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[116.38, 39.91], [116.41, 39.91], [116.41, 39.89], [116.38, 39.89], [116.38, 39.91]]]
+                }
+            },
+            {
+                "type": "Feature",
+                "geometry": { "type": "Point", "coordinates": [116.395, 39.905] }
+            }
+        ]
+    }, null, 2);
+    input.dispatchEvent(new Event('input'));
+</script>
+
+</body>
+</html>
